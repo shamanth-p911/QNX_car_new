@@ -1,0 +1,87 @@
+
+#define LEFT_BUTTON 18
+#define RIGHT_BUTTON 19
+
+#define LEFT_LED 25
+#define RIGHT_LED 26
+
+#define POT_PIN 34
+
+char command[32];
+int command_index = 0;
+
+unsigned long last_send = 0;
+
+void setup()
+{
+    Serial.begin(115200);
+
+    pinMode(LEFT_BUTTON, INPUT_PULLUP);
+    pinMode(RIGHT_BUTTON, INPUT_PULLUP);
+
+    pinMode(LEFT_LED, OUTPUT);
+    pinMode(RIGHT_LED, OUTPUT);
+
+    pinMode(POT_PIN, INPUT);
+
+    analogReadResolution(12);
+
+    digitalWrite(LEFT_LED, LOW);
+    digitalWrite(RIGHT_LED, LOW);
+}
+
+void loop()
+{
+    // Send sensor readings every 50 ms
+    if (millis() - last_send >= 50) {
+        last_send = millis();
+
+        int left = digitalRead(LEFT_BUTTON);
+        int right = digitalRead(RIGHT_BUTTON);
+        int pot = analogRead(POT_PIN);
+
+        Serial.printf(
+            "L:%d,R:%d,P:%d\n",
+            left, right, pot
+        );
+    }
+
+    // Receive LED commands from QNX
+    while (Serial.available()) {
+        char ch = Serial.read();
+
+        if (ch == '\r')
+            continue;
+
+        if (ch == '\n') {
+            command[command_index] = '\0';
+
+            int left, right;
+
+            if (sscanf(command, "LED:%d,%d",
+                       &left, &right) == 2 &&
+                (left == 0 || left == 1) &&
+                (right == 0 || right == 1)) {
+
+                digitalWrite(
+                    LEFT_LED,
+                    left ? HIGH : LOW
+                );
+
+                digitalWrite(
+                    RIGHT_LED,
+                    right ? HIGH : LOW
+                );
+            }
+
+            command_index = 0;
+        }
+        else if (command_index <
+                 (int)sizeof(command) - 1) {
+            command[command_index++] = ch;
+        }
+        else {
+            command_index = 0;
+        }
+    }
+}
