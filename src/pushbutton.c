@@ -1,41 +1,15 @@
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <termios.h>
 #include <errno.h>
+#include <sys/neutrino.h>
 
-#define SERIAL_PORT "/dev/ser1"
+#include "pushbutton.h"
+#include "led.h"
 
-int main(void)
+void *pushbutton_thread(void *arg)
 {
-    int fd = open(SERIAL_PORT, O_RDONLY | O_NOCTTY);
-
-    if (fd == -1) {
-        perror("Serial open failed");
-        return 1;
-    }
-
-    struct termios tty;
-
-    if (tcgetattr(fd, &tty) == -1) {
-        perror("tcgetattr");
-        close(fd);
-        return 1;
-    }
-
-    cfmakeraw(&tty);
-    cfsetispeed(&tty, B115200);
-    cfsetospeed(&tty, B115200);
-
-    tty.c_cflag |= CLOCAL | CREAD;
-
-    if (tcsetattr(fd, TCSANOW, &tty) == -1) {
-        perror("tcsetattr");
-        close(fd);
-        return 1;
-    }
+    PushbuttonConfig *config = (PushbuttonConfig *)arg;
 
     int left_state = 0;
     int right_state = 0;
@@ -47,18 +21,16 @@ int main(void)
     int index = 0;
     char ch;
 
-    printf("QNX INDICATOR CONTROLLER STARTED\n");
-    printf("LEFT = 0 | RIGHT = 0\n");
-    fflush(stdout);
+    printf("Pushbutton thread started\n");
 
     while (1) {
-        ssize_t n = read(fd, &ch, 1);
+        ssize_t n = read(config->serial_fd, &ch, 1);
 
         if (n < 0) {
             if (errno == EINTR)
                 continue;
 
-            perror("Serial read");
+            perror("Button serial read");
             break;
         }
 
@@ -72,40 +44,55 @@ int main(void)
             buffer[index] = '\0';
 
             int left_raw, right_raw;
+            int changed = 0;
 
             if (sscanf(buffer, "L:%d,R:%d",
                        &left_raw, &right_raw) == 2 &&
                 (left_raw == 0 || left_raw == 1) &&
                 (right_raw == 0 || right_raw == 1)) {
 
-                // Left button: falling edge
+                // GPIO18: Left button
                 if (previous_left == 1 && left_raw == 0) {
-
                     left_state = !left_state;
 
-                    if (left_state == 1)
+                    if (left_state)
                         right_state = 0;
 
-                    printf("LEFT = %d | RIGHT = %d\n",
-                           left_state, right_state);
-                    fflush(stdout);
+                    changed = 1;
                 }
 
-                // Right button: falling edge
+                // GPIO19: Right button
                 if (previous_right == 1 && right_raw == 0) {
-
                     right_state = !right_state;
 
-                    if (right_state == 1)
+                    if (right_state)
                         left_state = 0;
 
-                    printf("LEFT = %d | RIGHT = %d\n",
-                           left_state, right_state);
-                    fflush(stdout);
+                    changed = 1;
                 }
 
                 previous_left = left_raw;
                 previous_right = right_raw;
+
+                if (changed) {
+                    // Pack both states into one integer
+                    int value = (left_state << 1) |
+                                 right_state;
+
+                    // QNX-specific API
+                    if (MsgSendPulse(
+                            config->pulse_coid,
+                            -1,
+                            PULSE_LED_UPDATE,
+                            value) == -1) {
+                        perror("MsgSendPulse");
+                        break;
+                    }
+
+                    printf("BUTTON: LEFT=%d RIGHT=%d\n",
+                           left_state, right_state);
+                    fflush(stdout);
+                }
             }
 
             index = 0;
@@ -114,11 +101,9 @@ int main(void)
             buffer[index++] = ch;
         }
         else {
-            // Discard an oversized line
             index = 0;
         }
     }
 
-    close(fd);
-    return 0;
+    return NULL;
 }
