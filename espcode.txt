@@ -1,87 +1,235 @@
+#include <Arduino.h>
 
-#define LEFT_BUTTON 18
-#define RIGHT_BUTTON 19
+// ======================================
+// PIN DEFINITIONS
+// ======================================
 
-#define LEFT_LED 25
-#define RIGHT_LED 26
+#define LEFT_BUTTON   18
+#define RIGHT_BUTTON  19
 
-#define POT_PIN 34
+#define LEFT_LED      25
+#define RIGHT_LED     26
 
-char command[32];
-int command_index = 0;
+#define POT_PIN       34
 
-unsigned long last_send = 0;
+#define TRIG_PIN      32
+#define ECHO_PIN      33
+
+// ======================================
+// VARIABLES
+// ======================================
+
+char command[64];
+int commandIndex = 0;
+
+unsigned long lastSend = 0;
+
+const unsigned long SEND_INTERVAL = 50;
+
+// ======================================
+// ULTRASONIC SENSOR
+// ======================================
+
+int readDistance()
+{
+    // Clear trigger
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+
+    // Send 10 microsecond trigger
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+
+    // Measure echo duration
+    unsigned long duration =
+        pulseIn(ECHO_PIN, HIGH, 30000UL);
+
+    // No echo received
+    if (duration == 0)
+    {
+        return -1;
+    }
+
+    // Calculate distance in cm
+    int distance = (int)(
+        duration * 0.0343 / 2.0
+    );
+
+    return distance;
+}
+
+// ======================================
+// SERIAL COMMAND PROCESSING
+// ======================================
+
+void processCommand(const char *cmd)
+{
+    int left, right;
+    char extra;
+
+    // LED command from QNX
+    // Example: LED:1,0
+
+    if (sscanf(
+            cmd,
+            "LED:%d,%d%c",
+            &left,
+            &right,
+            &extra
+        ) == 2)
+    {
+        if ((left == 0 || left == 1) &&
+            (right == 0 || right == 1))
+        {
+            digitalWrite(
+                LEFT_LED,
+                left ? HIGH : LOW
+            );
+
+            digitalWrite(
+                RIGHT_LED,
+                right ? HIGH : LOW
+            );
+        }
+
+        return;
+    }
+
+    // Ultrasonic polling command from QNX
+    // Example: US?
+
+     // Ultrasonic polling command from QNX: "U?"
+    // Reply format QNX parses: "D:<cm>"
+    if (strcmp(cmd, "U?") == 0)
+    {
+        int distance = readDistance();
+        Serial.printf("D:%d\n", distance);
+        return;
+    }
+}
+
+// ======================================
+// SETUP
+// ======================================
 
 void setup()
 {
     Serial.begin(115200);
 
-    pinMode(LEFT_BUTTON, INPUT_PULLUP);
-    pinMode(RIGHT_BUTTON, INPUT_PULLUP);
+    // Pushbuttons
+    pinMode(
+        LEFT_BUTTON,
+        INPUT_PULLUP
+    );
 
-    pinMode(LEFT_LED, OUTPUT);
-    pinMode(RIGHT_LED, OUTPUT);
+    pinMode(
+        RIGHT_BUTTON,
+        INPUT_PULLUP
+    );
 
+    // LEDs
+    pinMode(
+        LEFT_LED,
+        OUTPUT
+    );
+
+    pinMode(
+        RIGHT_LED,
+        OUTPUT
+    );
+
+    digitalWrite(
+        LEFT_LED,
+        LOW
+    );
+
+    digitalWrite(
+        RIGHT_LED,
+        LOW
+    );
+
+    // Potentiometer
     pinMode(POT_PIN, INPUT);
 
     analogReadResolution(12);
 
-    digitalWrite(LEFT_LED, LOW);
-    digitalWrite(RIGHT_LED, LOW);
+    // Ultrasonic sensor
+    pinMode(
+        TRIG_PIN,
+        OUTPUT
+    );
+
+    pinMode(
+        ECHO_PIN,
+        INPUT
+    );
+
+    digitalWrite(
+        TRIG_PIN,
+        LOW
+    );
 }
+
+// ======================================
+// MAIN LOOP
+// ======================================
 
 void loop()
 {
-    // Send sensor readings every 50 ms
-    if (millis() - last_send >= 50) {
-        last_send = millis();
+    // Send button and potentiometer
+    // readings to QNX every 50 ms
 
-        int left = digitalRead(LEFT_BUTTON);
-        int right = digitalRead(RIGHT_BUTTON);
-        int pot = analogRead(POT_PIN);
+    if (millis() - lastSend >= SEND_INTERVAL)
+    {
+        lastSend = millis();
+
+        int left =
+            digitalRead(LEFT_BUTTON);
+
+        int right =
+            digitalRead(RIGHT_BUTTON);
+
+        int pot =
+            analogRead(POT_PIN);
 
         Serial.printf(
             "L:%d,R:%d,P:%d\n",
-            left, right, pot
+            left,
+            right,
+            pot
         );
     }
 
-    // Receive LED commands from QNX
-    while (Serial.available()) {
+    // Receive commands from QNX
+
+    while (Serial.available())
+    {
         char ch = Serial.read();
 
         if (ch == '\r')
+        {
             continue;
-
-        if (ch == '\n') {
-            command[command_index] = '\0';
-
-            int left, right;
-
-            if (sscanf(command, "LED:%d,%d",
-                       &left, &right) == 2 &&
-                (left == 0 || left == 1) &&
-                (right == 0 || right == 1)) {
-
-                digitalWrite(
-                    LEFT_LED,
-                    left ? HIGH : LOW
-                );
-
-                digitalWrite(
-                    RIGHT_LED,
-                    right ? HIGH : LOW
-                );
-            }
-
-            command_index = 0;
         }
-        else if (command_index <
-                 (int)sizeof(command) - 1) {
-            command[command_index++] = ch;
+
+        if (ch == '\n')
+        {
+            command[commandIndex] = '\0';
+
+            processCommand(command);
+
+            commandIndex = 0;
         }
-        else {
-            command_index = 0;
+        else if (
+            commandIndex <
+            (int)sizeof(command) - 1
+        )
+        {
+            command[commandIndex++] = ch;
+        }
+        else
+        {
+            commandIndex = 0;
         }
     }
 }
